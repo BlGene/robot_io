@@ -191,11 +191,13 @@ class PlaybackEnv:
 
         cam_info = load_camera_info(recording_dir)
         cnt2fn = lambda cnt: Path(recording_dir) / f"frame_{cnt:0{n_digits}d}.npz"
+
         if load == "all":
             # load all frames, first have to find which ones there are.
             files = sorted(glob(f"{recording_dir}/frame_*.npz"))
-            self.steps = [PlaybackEnvStep(fn, camera_info=cam_info) for fn in files]
-            self.keep_indexes = sorted(self.keep_dict.keys())
+            steps = [PlaybackEnvStep(fn, camera_info=cam_info) for fn in files]
+            self.keep_indexes = range(len(steps))
+            self.steps = steps
 
         elif isinstance(load, list):
             # load keyframes, first have to find which ones they are.
@@ -220,8 +222,11 @@ class PlaybackEnv:
         return self.steps[index]
 
     def __getattr__(self, name):
-        index = self.__getattribute__("index")
-        return getattr(self.steps[index], name)
+        try:
+            index = self.__getattribute__("index")
+            return getattr(self.steps[index], name)
+        except AttributeError:
+            return getattr(self, name)
 
     def step(self):
         self.index_keep += 1
