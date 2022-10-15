@@ -155,6 +155,9 @@ class PlaybackEnvStep:
     def get_robot_state(self):
         return self.data["robot_state"].item()
 
+    def get_info(self):
+        return self.data["info"].item()
+
     def _robot_get_tcp_pos(self):
         return self.data["robot_state"].item()["tcp_pos"]
 
