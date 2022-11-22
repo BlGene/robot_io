@@ -2,9 +2,10 @@ import time
 
 import gym
 import hydra
-import numpy as np
+
+from robot_io.actions.actions import Action
 from robot_io.input_devices.keyboard_input import keyboard_control
-from robot_io.utils.utils import FpsController, restrict_workspace, timeit
+from robot_io.utils.utils import FpsController
 
 
 class RobotEnv(gym.Env):
@@ -14,19 +15,21 @@ class RobotEnv(gym.Env):
 
     Args:
         robot: Robot interface.
-        workspace_limits: Workspace limits defined as a bounding box or as hollow cylinder.
+        camera_manager_cfg: camera manager configuration
+        workspace: workspace config.
+        freq: [Hz] frequency with which to control robot.
+        show_fps: print the FPS
     """
-
     def __init__(
         self,
         robot,
         camera_manager_cfg,
-        workspace_limits,
+        workspace,
         freq: int = 15,
         show_fps: bool = False,
     ):
         self.robot = robot
-        self.workspace_limits = workspace_limits
+        self.workspace = hydra.utils.instantiate(workspace)
         self.camera_manager = hydra.utils.instantiate(
             camera_manager_cfg, robot_name=robot.name
         )
@@ -40,7 +43,7 @@ class RobotEnv(gym.Env):
         """
         self.robot.open_gripper(blocking=True)
         if target_pos is not None and target_orn is not None:
-            success = self.robot.move_cart_pos_abs_ptp(target_pos, target_orn)
+            success = self.robot.move_cart_pos(target_pos, target_orn, ref="abs", path="ptp", blocking=True)
         else:
             success = self.robot.move_to_neutral()
 
@@ -104,26 +107,12 @@ class RobotEnv(gym.Env):
         """
         if action is None:
             return self._get_obs(), 0, False, {}
-        assert isinstance(action, dict) and len(action["motion"]) == 3
+        assert isinstance(action, Action)
 
-        target_pos, target_orn, gripper_action = action["motion"]
-        ref = action["ref"]
+        action = self.workspace.clip(action)
 
-        if ref == "abs":
-            target_pos = restrict_workspace(self.workspace_limits, target_pos)
-            # TODO: use LIN for panda
-            self.robot.move_async_cart_pos_abs_lin(target_pos, target_orn)
-        elif ref == "rel":
-            self.robot.move_async_cart_pos_rel_lin(target_pos, target_orn)
-        else:
-            raise ValueError
 
-        if gripper_action == 1:
-            self.robot.open_gripper()
-        elif gripper_action == -1:
-            self.robot.close_gripper()
-        else:
-            raise ValueError
+        self.robot.apply_action(action)
 
         self.fps_controller.step()
         if self.show_fps:
@@ -152,6 +141,7 @@ class RobotEnv(gym.Env):
             mode (str): the mode to render with
         """
         if mode == "human":
-            self.camera_manager.render()
             self.robot.visualize_joint_states()
             self.robot.visualize_external_forces()
+            self.camera_manager.render()
+

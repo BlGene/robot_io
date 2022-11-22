@@ -115,7 +115,7 @@ if __name__ == "__main__":
     # cam = Kinect4()
     from robot_io.cams.realsense.realsense import Realsense
     cam = Realsense()
-    cfg = OmegaConf.load("../conf/marker_detector/aruco.yaml")
+    cfg = OmegaConf.load("../../conf/marker_detector/aruco.yaml")
     marker_detector = hydra.utils.instantiate(cfg, cam=cam)
 
     while True:

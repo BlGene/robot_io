@@ -4,11 +4,13 @@ import time
 import numpy as np
 import pygame
 
+from robot_io.actions.actions import Action
+from robot_io.input_devices.base_input_device import BaseInputDevice
 from robot_io.robot_interface.base_robot_interface import GripperInterface as GI
 from robot_io.utils.utils import FpsController
 
 
-class KeyboardInput:
+class KeyboardInput(BaseInputDevice):
     """
     Keyboard input class.
     For 5-DOF control, use WASD to move the robot in the xy-plane, X/Z to move the robot in z-direction and
@@ -16,6 +18,7 @@ class KeyboardInput:
     For 7-DOF control, additionally use the arrow keys to pitch and roll the end-effector.
 
     Args:
+        action_params: Settings for action space.
         act_type: Currently only "continuous" is implemented.
         initial_gripper_state: "open" or "closed".
         dv: Position offset for relative actions in meter.
@@ -23,15 +26,11 @@ class KeyboardInput:
         mode: "5dof" or "7dof"
     """
 
-    def __init__(self, act_type="continuous", initial_gripper_state='open', dv=0.01, drot=0.2, reference_frame='tcp', mode='5dof', **kwargs):
-        assert act_type == 'continuous'
+    def __init__(self, action_params, initial_gripper_state='open', dv=0.01, drot=0.2, mode='5dof', **kwargs):
         assert mode in ('5dof', '7dof')
-        assert reference_frame in ('tcp', 'world')
-        self.reference_frame = reference_frame
+        self._action_params = action_params
         self.pressed_keys = []
-        self.mode = mode
         self.done = False
-
         self.speeds = [1.0, 0.5, .25, .1, .05]
         self.speed_index = 0
 
@@ -88,10 +87,21 @@ class KeyboardInput:
             action (dict): Keyboard action.
             record_info: None (to be consistent with other input devices).
         """
-        raw_action = self._handle_keyboard_events()
-        action = {"motion": np.split(raw_action, [3, 6]), "ref": "rel"}
+        raw_action, extra_keys = self._handle_keyboard_events()
+        target_pos, target_orn, grip = np.split(raw_action, [3, 6])
+
+        action = Action(target_pos=target_pos,
+                        target_orn=target_orn,
+                        gripper_action=grip,
+                        ref=self._action_params.ref,
+                        path=self._action_params.path,
+                        blocking=False,
+                        impedance=self._action_params.impedance)
+
         # To be compatible with vr input actions. For now there is nothing to pass as record info
         record_info = {"done": self.done}
+        if len(extra_keys) > 0:
+            record_info["extra_keys"] = extra_keys
 
         return action, record_info
 
@@ -103,6 +113,7 @@ class KeyboardInput:
             Action as a numpy array of shape (7,).
         """
         pressed_once_keys = []
+        extra_keys = set()
         for event in pygame.event.get():
             if event.type == pygame.KEYDOWN:
                 if event.key in self.movement_keys:
@@ -116,6 +127,8 @@ class KeyboardInput:
                     self.modify_keys[event.key]()
                 else:
                     print("Unassigned key:", event.key)
+                    extra_keys.add(event.unicode)
+
 
             elif event.type == pygame.KEYUP:
                 if event.key in self.movement_keys:
@@ -129,7 +142,7 @@ class KeyboardInput:
         # scale movements, but not gripper action.
         action *= self.speeds[self.speed_index]
 
-        if self.reference_frame == "world":
+        if self._action_params.ref == "rel_world":
             action[1] *= -1
             action[2] *= -1
             action[4] *= -1
@@ -141,7 +154,7 @@ class KeyboardInput:
         pygame.display.update()
 
         assert action.shape == (7,)
-        return action
+        return action, extra_keys
 
     @staticmethod
     def print_all_events():

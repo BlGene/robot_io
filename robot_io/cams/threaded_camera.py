@@ -73,7 +73,7 @@ class _CameraThread(threading.Thread):
 if __name__ == "__main__":
     from omegaconf import OmegaConf
     import cv2
-    cfg = OmegaConf.load("../conf/cams/gripper_cam/framos_highres.yaml")
+    cfg = OmegaConf.load("../../conf/cams/gripper_cam/framos_highres.yaml")
     cam = ThreadedCamera(cfg)
 
     while True:

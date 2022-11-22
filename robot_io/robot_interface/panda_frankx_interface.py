@@ -1,14 +1,12 @@
 import time
 
-import cv2
 import numpy as np
 import hydra.utils
 
-from robot_io.control.rel_action_control import RelActionControl
+from robot_io.actions.rel_action_control import RelActionControl
 from robot_io.robot_interface.base_robot_interface import BaseRobotInterface
-from frankx import Affine, JointMotion, LinearMotion, Robot, PathMotion, WaypointMotion, Waypoint, \
-    LinearRelativeMotion, StopMotion, ImpedanceMotion, JointWaypointMotion
-from frankx.gripper import Gripper
+from frankx import Affine, JointMotion, Robot, WaypointMotion, Waypoint, \
+    ImpedanceMotion, JointWaypointMotion
 from _frankx import NetworkException
 
 from robot_io.utils.frankx_utils import to_affine
@@ -39,7 +37,6 @@ class PandaFrankXInterface(BaseRobotInterface):
         ik: Config of the inverse kinematic solver.
         workspace_limits: Workspace limits defined as a bounding box or as hollow cylinder.
         libfranka_params: DictConfig of params for libfranka.
-        use_impedance: If True, use impedance control whenever it is possible.
         frankx_params: DictConfig of general params for Frankx.
         impedance_params: DictConfig of params for Frankx impedance motion.
         rel_action_params: DictConfig of params for relative action control.
@@ -52,43 +49,38 @@ class PandaFrankXInterface(BaseRobotInterface):
                  ll,
                  ul,
                  ik,
-                 workspace_limits,
+                 workspace,
                  libfranka_params,
-                 use_impedance,
                  frankx_params,
                  impedance_params,
                  rel_action_params,
-                 gripper_params):
+                 gripper):
         self.name = "panda"
-        self.neutral_pose = neutral_pose
-        self.ll = ll
-        self.ul = ul
+        self._neutral_pose = neutral_pose
 
         # robot
-        self.robot = Robot(fci_ip, urdf_path=(get_git_root(__file__) / urdf_path).as_posix())
-        self.robot.recover_from_errors()
-        self.robot.set_default_behavior()
-        self.libfranka_params = libfranka_params
+        self._robot = Robot(fci_ip, urdf_path=(get_git_root(__file__) / urdf_path).as_posix())
+        self._robot.recover_from_errors()
+        self._robot.set_default_behavior()
+        self._libfranka_params = libfranka_params
         self.set_robot_params(libfranka_params, frankx_params)
 
         # impedance
-        self.use_impedance = use_impedance
-        self.impedance_params = impedance_params
+        self._impedance_params = impedance_params
 
-        self.rel_action_converter = RelActionControl(ll=ll, ul=ul, workspace_limits=workspace_limits,
-                                                     **rel_action_params)
+        self._rel_action_converter = RelActionControl(ll=ll, ul=ul, workspace=workspace, **rel_action_params)
 
-        self.motion_thread = None
-        self.current_motion = None
+        self._motion_thread = None
+        self._current_motion = None
 
-        self.gripper = Gripper(fci_ip, **gripper_params)
+        self._gripper = hydra.utils.instantiate(gripper)
         self.open_gripper(blocking=True)
 
         # F_T_NE is the transformation from nominal end-effector (NE) frame to flange (F) frame.
-        F_T_NE = np.array(self.robot.read_once().F_T_NE).reshape((4, 4)).T
-        self.ik_solver = hydra.utils.instantiate(ik, F_T_NE=F_T_NE)
+        F_T_NE = np.array(self._robot.read_once().F_T_NE).reshape((4, 4)).T
+        self._ik_solver = hydra.utils.instantiate(ik, F_T_NE=F_T_NE)
 
-        self.reference_type = ReferenceType.ABSOLUTE
+        self._reference_type = ReferenceType.ABSOLUTE
         super().__init__(ll=ll, ul=ul)
 
     def __del__(self):
@@ -96,117 +88,117 @@ class PandaFrankXInterface(BaseRobotInterface):
 
     def set_robot_params(self, libfranka_params, frankx_params):
         # params of libfranka
-        self.robot.set_collision_behavior(libfranka_params.contact_torque_threshold,
-                                          libfranka_params.collision_torque_threshold,
-                                          libfranka_params.contact_force_threshold,
-                                          libfranka_params.collision_force_threshold)
-        self.robot.set_joint_impedance(libfranka_params.franka_joint_impedance)
+        self._robot.set_collision_behavior(libfranka_params.contact_torque_threshold,
+                                           libfranka_params.collision_torque_threshold,
+                                           libfranka_params.contact_force_threshold,
+                                           libfranka_params.collision_force_threshold)
+        self._robot.set_joint_impedance(libfranka_params.franka_joint_impedance)
 
         # params of frankx
-        self.robot.velocity_rel = frankx_params.velocity_rel
-        self.robot.acceleration_rel = frankx_params.acceleration_rel
-        self.robot.jerk_rel = frankx_params.jerk_rel
+        self._robot.velocity_rel = frankx_params.velocity_rel
+        self._robot.acceleration_rel = frankx_params.acceleration_rel
+        self._robot.jerk_rel = frankx_params.jerk_rel
 
     def move_to_neutral(self):
-        return self.move_joint_pos(self.neutral_pose)
+        return self.move_joint_pos(self._neutral_pose)
 
-    def move_cart_pos_abs_ptp(self, target_pos, target_orn):
-        self.reference_type = ReferenceType.ABSOLUTE
-        # if self.use_impedance:
-        #     log.warning("Impedance motion is not available for synchronous motions. Not using impedance.")
-        q_desired = self._inverse_kinematics(target_pos, target_orn)
-        return self.move_joint_pos(q_desired)
-
-    def move_cart_pos_rel_ptp(self, rel_target_pos, rel_target_orn):
-        target_pos, target_orn = self.rel_action_converter.to_absolute(rel_target_pos, rel_target_orn, self.get_state(), self.reference_type)
-        self.reference_type = ReferenceType.RELATIVE
-        q_desired = self._inverse_kinematics(target_pos, target_orn)
-        self.abort_motion()
-        self.robot.move(JointMotion(q_desired))
-
-    def move_async_cart_pos_rel_lin(self, rel_target_pos, rel_target_orn):
-        target_pos, target_orn = self.rel_action_converter.to_absolute(rel_target_pos, rel_target_orn, self.get_state(), self.reference_type)
-        self.reference_type = ReferenceType.RELATIVE
-        self._frankx_async_impedance_motion(target_pos, target_orn)
-
-    def move_async_cart_pos_abs_ptp(self, target_pos, target_orn):
-        self.reference_type = ReferenceType.ABSOLUTE
-        if self.use_impedance:
-            log.warning("Impedance motion for cartesian PTP is currently not implemented. Not using impedance.")
-        q_desired = self._inverse_kinematics(target_pos, target_orn)
-        self.move_async_joint_pos(q_desired)
-
-    def move_cart_pos_abs_lin(self, target_pos, target_orn):
-        self.reference_type = ReferenceType.ABSOLUTE
-        if self.use_impedance:
-            log.warning("Impedance motion for cartesian LIN is currently not implemented. Not using impedance.")
-        self.abort_motion()
-        target_pose = to_affine(target_pos, target_orn) * NE_T_EE
-        self.current_motion = WaypointMotion([Waypoint(target_pose)])
-        self.robot.move(self.current_motion)
-
-    def move_async_cart_pos_abs_lin(self, target_pos, target_orn):
-        self.reference_type = ReferenceType.ABSOLUTE
-        if self.use_impedance:
-            self._frankx_async_impedance_motion(target_pos, target_orn)
+    def move_cart_pos(self, target_pos, target_orn, ref="abs", path="ptp", blocking=True, impedance=False):
+        if ref == "abs":
+            self._reference_type = ReferenceType.ABSOLUTE
+        elif ref == "rel" or ref == "rel_world":
+            control_frame = "tcp" if ref == "rel" else "world"
+            target_pos, target_orn = self._rel_action_converter.to_absolute(target_pos,
+                                                                            target_orn,
+                                                                            self.get_state(),
+                                                                            self._reference_type,
+                                                                            control_frame=control_frame)
+            self._reference_type = ReferenceType.RELATIVE
         else:
-            self._frankx_async_lin_motion(target_pos, target_orn)
+            raise ValueError
 
-    def move_async_joint_pos(self, joint_positions):
-        if self._is_active(JointWaypointMotion):
-            self.current_motion.set_next_target(joint_positions)
+        if blocking:
+            if impedance:
+                log.error("Impedance currently not implemented for synchronous motions.")
+                raise NotImplementedError
+
+            self.abort_motion()
+            if path == "ptp":
+                joint_positions = self._inverse_kinematics(target_pos, target_orn)
+                success = self._robot.move(JointMotion(joint_positions))
+            elif path == "lin":
+                target_pose = to_affine(target_pos, target_orn) * NE_T_EE
+                self._current_motion = WaypointMotion([Waypoint(target_pose)])
+                success = self._robot.move(self._current_motion)
+            else:
+                raise ValueError
+
+            if not success:
+                self._robot.recover_from_errors()
+            return success
         else:
-            if self.current_motion is not None:
-                self.abort_motion()
-            self.current_motion = JointWaypointMotion([joint_positions], return_when_finished=False)
-            self.motion_thread = self.robot.move_async(self.current_motion)
+            if path == "ptp":
+                if impedance:
+                    log.error("Impedance currently not implemented for asynchronous ptp motions.")
+                    raise NotImplementedError
+                joint_positions = self._inverse_kinematics(target_pos, target_orn)
+                return self._frankx_async_joint_motion(joint_positions)
+            elif path == "lin":
+                if impedance:
+                    return self._frankx_async_impedance_motion(target_pos, target_orn)
+                else:
+                    return self._frankx_async_lin_motion(target_pos, target_orn)
+            else:
+                raise ValueError
 
-    def move_joint_pos(self, joint_positions):
-        self.reference_type = ReferenceType.JOINT
-        self.abort_motion()
-        success = self.robot.move(JointMotion(joint_positions))
-        if not success:
-            self.robot.recover_from_errors()
-        return success
+    def move_joint_pos(self, joint_positions, blocking=True):
+        self._reference_type = ReferenceType.JOINT
+        if blocking:
+            self.abort_motion()
+            success = self._robot.move(JointMotion(joint_positions))
+            if not success:
+                self._robot.recover_from_errors()
+            return success
+        else:
+            return self._frankx_async_joint_motion(joint_positions)
 
     def abort_motion(self):
-        if self.current_motion is not None:
-            self.current_motion.stop()
-            self.current_motion = None
-        if self.motion_thread is not None:
+        if self._current_motion is not None:
+            self._current_motion.stop()
+            self._current_motion = None
+        if self._motion_thread is not None:
         #     # self.motion_thread.stop()
-            self.motion_thread.join()
-            self.motion_thread = None
+            self._motion_thread.join()
+            self._motion_thread = None
         while 1:
             try:
-                self.robot.recover_from_errors()
+                self._robot.recover_from_errors()
                 break
             except NetworkException:
                 time.sleep(0.01)
                 continue
 
     def get_state(self):
-        if self.current_motion is None:
-            _state = self.robot.read_once()
+        if self._current_motion is None:
+            _state = self._robot.read_once()
         else:
-            _state = self.current_motion.get_robot_state()
+            _state = self._current_motion.get_robot_state()
         pos, orn = self.get_tcp_pos_orn()
 
         state = {"tcp_pos": pos,
                  "tcp_orn": orn,
                  "joint_positions": np.array(_state.q),
-                 "gripper_opening_width": self.gripper.width(),
+                 "gripper_opening_width": self._gripper.width(),
                  "force_torque": WRENCH_FRAME_CONV @ np.array(_state.K_F_ext_hat_K),
                  "contact": np.array(_state.cartesian_contact)}
         return state
 
     def get_tcp_pos_orn(self):
-        if self.current_motion is None:
-            pose = self.robot.current_pose() * EE_T_NE
+        if self._current_motion is None:
+            pose = self._robot.current_pose() * EE_T_NE
         else:
-            pose = self.current_motion.current_pose() * EE_T_NE
+            pose = self._current_motion.current_pose() * EE_T_NE
             while np.all(pose.translation() == 0):
-                pose = self.current_motion.current_pose() * EE_T_NE
+                pose = self._current_motion.current_pose() * EE_T_NE
                 time.sleep(0.01)
         pos, orn = np.array(pose.translation()), np.array(pose.quaternion())
         return pos, orn
@@ -215,10 +207,29 @@ class PandaFrankXInterface(BaseRobotInterface):
         return pos_orn_to_matrix(*self.get_tcp_pos_orn())
 
     def open_gripper(self, blocking=False):
-        self.gripper.open(blocking)
+        self._gripper.open(blocking)
 
     def close_gripper(self, blocking=False):
-        self.gripper.close(blocking)
+        self._gripper.close(blocking)
+
+    def _frankx_async_joint_motion(self, joint_positions):
+        """
+        Do not call this directly.
+
+        Args:
+            joint_positions:
+
+        Returns:
+        """
+        if self._is_active(JointWaypointMotion):
+            self._current_motion.set_next_target(joint_positions)
+        else:
+            if self._current_motion is not None:
+                self.abort_motion()
+            self._current_motion = JointWaypointMotion([joint_positions], return_when_finished=False)
+            self._motion_thread = self._robot.move_async(self._current_motion)
+        # TODO: how to handle async return?
+        return True
 
     def _frankx_async_impedance_motion(self, target_pos, target_orn):
         """
@@ -230,13 +241,15 @@ class PandaFrankXInterface(BaseRobotInterface):
         """
         target_pose = to_affine(target_pos, target_orn) * NE_T_EE
         if self._is_active(ImpedanceMotion):
-            self.current_motion.set_target(target_pose)
+            self._current_motion.set_target(target_pose)
         else:
-            if self.current_motion is not None:
+            if self._current_motion is not None:
                 self.abort_motion()
-            self.current_motion = self._new_impedance_motion()
-            self.current_motion.set_target(target_pose)
-            self.motion_thread = self.robot.move_async(self.current_motion)
+            self._current_motion = self._new_impedance_motion()
+            self._current_motion.set_target(target_pose)
+            self._motion_thread = self._robot.move_async(self._current_motion)
+        # TODO: how to handle async return?
+        return True
 
     def _new_impedance_motion(self):
         """
@@ -245,15 +258,15 @@ class PandaFrankXInterface(BaseRobotInterface):
         Returns:
             Impedance motion object.
         """
-        if self.impedance_params.use_nullspace:
-            return ImpedanceMotion(self.impedance_params.translational_stiffness,
-                                   self.impedance_params.rotational_stiffness,
-                                   self.impedance_params.nullspace_stiffness,
-                                   self.impedance_params.q_d_nullspace,
-                                   self.impedance_params.damping_xi)
+        if self._impedance_params.use_nullspace:
+            return ImpedanceMotion(self._impedance_params.translational_stiffness,
+                                   self._impedance_params.rotational_stiffness,
+                                   self._impedance_params.nullspace_stiffness,
+                                   self._impedance_params.q_d_nullspace,
+                                   self._impedance_params.damping_xi)
         else:
-            return ImpedanceMotion(self.impedance_params.translational_stiffness,
-                                   self.impedance_params.rotational_stiffness)
+            return ImpedanceMotion(self._impedance_params.translational_stiffness,
+                                   self._impedance_params.rotational_stiffness)
 
     def _frankx_async_lin_motion(self, target_pos, target_orn):
         """
@@ -265,12 +278,14 @@ class PandaFrankXInterface(BaseRobotInterface):
         """
         target_pose = to_affine(target_pos, target_orn) * NE_T_EE
         if self._is_active(WaypointMotion):
-            self.current_motion.set_next_waypoint(Waypoint(target_pose))
+            self._current_motion.set_next_waypoint(Waypoint(target_pose))
         else:
-            if self.current_motion is not None:
+            if self._current_motion is not None:
                 self.abort_motion()
-            self.current_motion = WaypointMotion([Waypoint(target_pose), ], return_when_finished=False)
-            self.motion_thread = self.robot.move_async(self.current_motion)
+            self._current_motion = WaypointMotion([Waypoint(target_pose), ], return_when_finished=False)
+            self._motion_thread = self._robot.move_async(self._current_motion)
+        # TODO: how to handle async return?
+        return True
 
     def _inverse_kinematics(self, target_pos, target_orn):
         """
@@ -284,12 +299,12 @@ class PandaFrankXInterface(BaseRobotInterface):
             Target joint angles in rad.
         """
         current_q = self.get_state()['joint_positions']
-        new_q = self.ik_solver.inverse_kinematics(target_pos, target_orn, current_q)
+        new_q = self._ik_solver.inverse_kinematics(target_pos, target_orn, current_q)
         return new_q
 
     def _is_active(self, motion):
         """Returns True if there is a currently active motion with the same type as motion."""
-        return self.current_motion is not None and isinstance(self.current_motion, motion) and self.motion_thread.is_alive()
+        return self._current_motion is not None and isinstance(self._current_motion, motion) and self._motion_thread.is_alive()
 
     def visualize_external_forces(self, canvas_width=500):
         """
@@ -298,12 +313,12 @@ class PandaFrankXInterface(BaseRobotInterface):
         Args:
             canvas_width: Display width in pixel.
         """
-        contact = np.array(self.libfranka_params.contact_force_threshold)
-        collision = np.array(self.libfranka_params.collision_force_threshold)
+        contact = np.array(self._libfranka_params.contact_force_threshold)
+        collision = np.array(self._libfranka_params.collision_force_threshold)
         self._visualize_external_forces(contact, collision, canvas_width)
 
 
-@hydra.main(config_path="../conf", config_name="panda_teleop.yaml")
+@hydra.main(config_path="../../conf", config_name="panda_teleop.yaml")
 def main(cfg):
     robot = hydra.utils.instantiate(cfg.robot)
     robot.move_to_neutral()

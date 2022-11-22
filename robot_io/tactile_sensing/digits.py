@@ -80,7 +80,7 @@ class ThreadedDigits:
 
 def test_digit():
     from omegaconf import OmegaConf
-    cfg = OmegaConf.load("../conf/tactile_sensing/digits.yaml")
+    cfg = OmegaConf.load("../../conf/tactile_sensing/digits.yaml")
     d = ThreadedDigits(cfg)
     while True:
         frame1, frame2 = d.get_image()

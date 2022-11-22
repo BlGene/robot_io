@@ -1,7 +1,16 @@
+import hydra.utils
 import numpy as np
 
+import logging
+log = logging.getLogger(__name__)
+
 from robot_io.utils.utils import quat_to_euler, orn_to_matrix, matrix_to_orn, angle_between, to_world_frame, \
-    to_tcp_frame, ReferenceType, restrict_workspace, timeit
+    to_tcp_frame, ReferenceType
+
+
+def clip_action(new_pos, tcp_pos, threshold):
+    vec = (new_pos - tcp_pos) / np.linalg.norm(new_pos - tcp_pos)
+    return tcp_pos + vec * threshold
 
 
 class RelActionControl:
@@ -10,12 +19,10 @@ class RelActionControl:
     It handles the conversion of relative actions to absolute actions.
 
     Args:
-        workspace_limits: workspace limits defined as a bounding box or as hollow cylinder.
+        workspace: workspace config.
         relative_action_reference_frame: If "current", interpret relative action wrt. the current pose of the robot.
             This may lead to a drift if the load masses are not correctly configured.
             If "desired", interpret relative action as an update to a desired pose (setpoint).
-        relative_action_control_frame: If "world", interpret relative action wrt. robot base frame (world frame).
-            If "tcp" interpret relative action wrt. tcp frame.
         relative_pos_clip_threshold: When using relative_action_reference_frame="desired" clip the position part of
             the relative action if it deviates from the current robot position further than a threshold (x,y,z).
         relative_rot_clip_threshold: When using relative_action_reference_frame="desired" clip the orientation part of
@@ -29,9 +36,8 @@ class RelActionControl:
         default_orn_y: Default euler angle β around y-axis for 5-dof control.
     """
     def __init__(self,
-                 workspace_limits,
+                 workspace,
                  relative_action_reference_frame,
-                 relative_action_control_frame,
                  relative_pos_clip_threshold,
                  relative_rot_clip_threshold,
                  limit_control_5_dof,
@@ -42,11 +48,10 @@ class RelActionControl:
                  default_orn_x,
                  default_orn_y):
 
-        self.workspace_limits = workspace_limits
+        self.workspace = hydra.utils.instantiate(workspace)
         assert relative_action_reference_frame in ["current", "desired"]
         self.relative_action_reference_frame = relative_action_reference_frame
-        assert relative_action_control_frame in ["world", "tcp"]
-        self.relative_action_control_frame = relative_action_control_frame
+
         self.relative_pos_clip_threshold = relative_pos_clip_threshold
         self.relative_rot_clip_threshold = relative_rot_clip_threshold
         self.limit_control_5_dof = limit_control_5_dof
@@ -58,48 +63,71 @@ class RelActionControl:
         self.default_orn_y = default_orn_y
         self.desired_pos, self.desired_orn = None, None
 
-    def to_absolute(self, rel_action_pos, rel_action_orn, state, reference_type):
+    def to_absolute(self, rel_action_pos, rel_action_orn, state, reference_type, control_frame):
         """
         Convert relative action to absolute action.
 
         Args:
             rel_action_pos: Position increment (x,y,z) in meter.
-            rel_action_orn: Orientation increment (α,β,γ) in rad.
+            rel_action_orn: Orientation increment as euler angles (α,β,γ) in rad or quaternion (x,y,z,w).
             state: Robot state dict.
             reference_type (enum): RELATIVE, ABSOLUTE or JOINT.
+            control_frame: world or tcp
 
         Returns:
             abs_target_pos: absolute target position (x,y,z).
             abs_target_orn: absolute target orientation (α,β,γ).
         """
+        assert len(rel_action_pos) == 3
+        if len(rel_action_orn) == 4:
+            rel_action_orn = quat_to_euler(rel_action_orn)
+        assert control_frame in ("tcp", "world")
+        in_relative_control_mode = reference_type == ReferenceType.RELATIVE
         tcp_pos, tcp_orn, joint_positions = state["tcp_pos"], state["tcp_orn"], state["joint_positions"]
+        if not in_relative_control_mode and not self.workspace.is_inside(tcp_pos):
+            logging.error("Robot outside workspace. PLease make sure that reset pose lies within workspace limits.")
+            logging.error(f"{self.workspace}, TCP position: {tcp_pos}")
+            raise Exception
         if self.limit_control_5_dof:
-            rel_action_orn = self._enforce_limit_gripper_joint(joint_positions, rel_action_orn)
+            # limit control to rotations around gripper z-axis
             rel_action_orn[:2] = 0
-        rel_action_pos, rel_action_orn = self._restrict_action_if_contact(rel_action_pos, rel_action_orn, state)
+            # clip relative actions that would violate the limits of the last joint (gripper joint)
+            rel_action_orn = self._enforce_limit_gripper_joint(joint_positions, rel_action_orn)
+        # if a contact is detected, avoid moving the robot further in the direction of the contact
+        rel_action_pos, rel_action_orn = self._restrict_action_if_contact(rel_action_pos, rel_action_orn, state, control_frame)
 
+        # relative actions are interpreted w.r.t. the current measured tcp pose
         if self.relative_action_reference_frame == "current":
-            if self.relative_action_control_frame == "tcp":
+            if control_frame == "tcp":
+                # in case relative actions are specified in tcp frame, convert to world frame.
                 rel_action_pos, rel_action_orn = to_world_frame(rel_action_pos, rel_action_orn, tcp_orn)
             tcp_orn = quat_to_euler(tcp_orn)
+            # apply relative action
             abs_target_pos = tcp_pos + rel_action_pos
             abs_target_orn = matrix_to_orn(orn_to_matrix(rel_action_orn) @ orn_to_matrix(tcp_orn))
             if self.limit_control_5_dof:
+                # if control is limited to rotations around tcp z-axis,
+                # set the tcp rotation around x and y-axis to default values
                 abs_target_orn = self._enforce_5_dof_control(abs_target_orn)
-            abs_target_pos = restrict_workspace(self.workspace_limits, abs_target_pos)
+            abs_target_pos = self.workspace.clip(abs_target_pos)
             return abs_target_pos, abs_target_orn
+        # relative actions are interpreted w.r.t. a desired (virtual) tcp pose
         else:
-            if reference_type != ReferenceType.RELATIVE:
+            if not in_relative_control_mode:
+                # when changing from absolute control to relative control, reset desired pose
                 self.desired_pos, self.desired_orn = tcp_pos, tcp_orn
                 if len(self.desired_orn) == 4:
                     self.desired_orn = quat_to_euler(self.desired_orn)
                 if self.limit_control_5_dof:
                     self.desired_orn = self._enforce_5_dof_control(self.desired_orn)
-            if self.relative_action_control_frame == "tcp":
+            if control_frame == "tcp":
+                # in case relative actions are specified in tcp frame, convert to world frame.
                 rel_action_pos, rel_action_orn = to_world_frame(rel_action_pos, rel_action_orn, self.desired_orn)
+            # apply relative action
+
             self.desired_pos, desired_orn = self._apply_to_desired_pose(rel_action_pos, rel_action_orn, tcp_pos, tcp_orn)
             self.desired_orn = self._restrict_orientation(desired_orn)
-            self.desired_pos = restrict_workspace(self.workspace_limits, self.desired_pos)
+            self.desired_pos = self.workspace.clip(self.desired_pos)
             return self.desired_pos, self.desired_orn
 
     def _enforce_5_dof_control(self, abs_target_orn):
@@ -134,7 +162,7 @@ class RelActionControl:
             rel_target_orn[2] = 0
         return rel_target_orn
 
-    def _restrict_action_if_contact(self, rel_action_pos, rel_action_orn, state):
+    def _restrict_action_if_contact(self, rel_action_pos, rel_action_orn, state, control_frame):
         """
         If the robot's contact force-torque thresholds are exceeded, set the relative action component which goes in the
         direction of contact to 0.
@@ -151,21 +179,22 @@ class RelActionControl:
         """
         if not np.any(state["contact"]):
             return rel_action_pos, rel_action_orn
-
-        if self.relative_action_control_frame == "world":
+        print(state["contact"])
+        if control_frame == "world":
             # rel_action_pos = np.linalg.inv(orn_to_matrix(state["tcp_orn"])) @ rel_action_pos
             rel_action_pos, rel_action_orn = to_tcp_frame(rel_action_pos, rel_action_orn, quat_to_euler(state["tcp_orn"]))
         for i in range(3):
             if state["contact"][i]:
                 # check opposite signs
                 if state["force_torque"][i] * rel_action_pos[i] < 0:
+                    print(state["force_torque"][i], rel_action_pos[i])
                     rel_action_pos[i] = 0
         for i in range(3):
             if state["contact"][i + 3]:
                 # check opposite signs
                 if state["force_torque"][i + 3] * rel_action_orn[i] < 0:
                     rel_action_orn[i] = 0
-        if self.relative_action_control_frame == "world":
+        if control_frame == "world":
             rel_action_pos, rel_action_orn = to_world_frame(rel_action_pos, rel_action_orn, quat_to_euler(state["tcp_orn"]))
         return rel_action_pos, rel_action_orn
 
@@ -207,11 +236,14 @@ class RelActionControl:
         # limit position
         desired_pos = self.desired_pos.copy()
         desired_orn = self.desired_orn.copy()
-        for i in range(3):
-            if rel_action_pos[i] > 0 and self.desired_pos[i] - tcp_pos[i] < self.relative_pos_clip_threshold:
-                desired_pos[i] += rel_action_pos[i]
-            elif rel_action_pos[i] < 0 and tcp_pos[i] - self.desired_pos[i] < self.relative_pos_clip_threshold:
-                desired_pos[i] += rel_action_pos[i]
+        # for i in range(3):
+        #     if rel_action_pos[i] > 0 and self.desired_pos[i] - tcp_pos[i] < self.relative_pos_clip_threshold:
+        #         desired_pos[i] += rel_action_pos[i]
+        #     elif rel_action_pos[i] < 0 and tcp_pos[i] - self.desired_pos[i] < self.relative_pos_clip_threshold:
+        #         desired_pos[i] += rel_action_pos[i]
+        desired_pos += rel_action_pos
+        if np.linalg.norm(desired_pos - tcp_pos) > self.relative_pos_clip_threshold:
+            desired_pos = clip_action(desired_pos, tcp_pos, self.relative_pos_clip_threshold)
         # limit orientation
         rot_diff = quat_to_euler(matrix_to_orn(np.linalg.inv(orn_to_matrix(self.desired_orn)) @ orn_to_matrix(tcp_orn)))
         for i in range(3):

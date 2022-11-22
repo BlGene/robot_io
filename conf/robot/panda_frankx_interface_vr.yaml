@@ -1,0 +1,12 @@
+defaults:
+  - panda_frankx_interface
+  - _self_
+
+frankx_params:
+  velocity_rel: 0.3
+  acceleration_rel: 0.3
+
+impedance_params:
+  translational_stiffness: 500  # 400 for teleop, 600 for 3dmouse / policy
+  rotational_stiffness: 60  # 60 for teleop, 200 for 3dmouse / policy
+

@@ -111,7 +111,7 @@ def load_recording(path):
     return tcp_poses, marker_poses
 
 
-@hydra.main(config_path="../conf")
+@hydra.main(config_path="../../conf")
 def main(cfg):
     """
     Calibrate the static camera by attaching a marker to the end-effector and recording marker poses with VR control.

@@ -2,7 +2,7 @@ import hydra
 import numpy as np
 
 
-@hydra.main(config_path="../conf", config_name="replay_recorded_trajectory")
+@hydra.main(config_path="../../conf", config_name="replay_recorded_trajectory")
 def main(cfg):
     """
     Starting from the neutral position, move the EE left and right.

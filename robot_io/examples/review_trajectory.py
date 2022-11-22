@@ -1,13 +1,13 @@
-import time
 from pathlib import Path
 
 import hydra
 import numpy as np
-from robot_io.utils.utils import ReferenceType
-from robot_io.utils.utils import restrict_workspace
-from robot_io.control.rel_action_control import RelActionControl
 
-from robot_io.utils.utils import FpsController, to_relative_action_dict, to_relative_action_pos_dict
+from robot_io.actions import rel_action_control
+from robot_io.utils.utils import ReferenceType
+from robot_io.actions.rel_action_control import RelActionControl
+
+from robot_io.utils.utils import to_relative_action_dict, to_relative_action_pos_dict
 
 N_DIGITS = 6
 
@@ -88,7 +88,8 @@ def get_vars(cfg, i, converter="current_state", relative_actions="pp", target_po
 
     return converter_robot_state, relative_actions_estimates, target_pos_estimate
 
-@hydra.main(config_path="../conf", config_name="replay_recorded_trajectory")
+
+@hydra.main(config_path="../../conf", config_name="replay_recorded_trajectory")
 def main(cfg):
     """
     Replay a recorded trajectory, either with absolute actions or relative actions.
@@ -96,10 +97,8 @@ def main(cfg):
     Args:
         cfg: Hydra config
     """
-    rel_action_converter = RelActionControl(ll=cfg.robot.ll, ul=cfg.robot.ul,
-                                            workspace_limits=cfg.robot.workspace_limits,
+    rel_action_converter = RelActionControl(ll=cfg.robot.ll, ul=cfg.robot.ul, workspace=cfg.robot.workspace,
                                             **cfg.robot.rel_action_params)
-
     use_rel_actions = cfg.use_rel_actions
     ep_start_end_ids = get_ep_start_end_ids(cfg.load_dir)
     # fps = FpsController(cfg.freq)
@@ -118,7 +117,7 @@ def main(cfg):
             robot_state, relative_actions_estimates, target_pos = \
                 get_vars(cfg, i, converter="pos", relative_actions="aa", target_pos="pos")
 
-            target_pos = restrict_workspace(cfg.robot.workspace_limits, target_pos)
+            target_pos = rel_action_converter.workspace.clip(target_pos)
             # Relative actions converted to absolute
             rel_target_pos = relative_actions_estimates["motion"][0]
             rel_target_orn = relative_actions_estimates["motion"][1]

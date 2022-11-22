@@ -105,7 +105,7 @@ def record_gripper_cam_trajectory(robot, marker_detector, cfg):
     return tcp_poses, marker_poses
 
 
-@hydra.main(config_path="../conf")
+@hydra.main(config_path="../../conf")
 def main(cfg):
     """
     Calibrate the gripper camera.

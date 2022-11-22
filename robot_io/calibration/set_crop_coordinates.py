@@ -84,9 +84,7 @@ def set_crop_coordinates(cam, resolution=None):
                 continue
 
 
-
-
-@hydra.main(config_path="../conf", config_name="set_crop_coordinates")
+@hydra.main(config_path="../../conf", config_name="set_crop_coordinates")
 def main(cfg):
     cam = hydra.utils.instantiate(cfg.cam)
     set_crop_coordinates(cam, resolution=cfg.resolution)

@@ -14,7 +14,7 @@ def get_point_in_world_frame(cam, robot, T_world_cam, clicked_point, depth):
     return point_world_frame[:3]
 
 
-@hydra.main(config_path="../conf", config_name="panda_calibrate_static_cam")
+@hydra.main(config_path="../../conf", config_name="panda_calibrate_static_cam")
 def main(cfg):
     cam = hydra.utils.instantiate(cfg.cam)
     robot = hydra.utils.instantiate(cfg.robot)

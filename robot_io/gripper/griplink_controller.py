@@ -80,8 +80,14 @@ class GriplinkController:
 		cmd_string = f"DEVSTATE[{port}]?"
 		ret_string = f"DEVSTATE[{port}]="
 		self._send_msg(cmd_string)
-		ret = self._recv_msg()
-		tmp = int(ret.lstrip(ret_string))
+		for i in range(3):
+			ret = self._recv_msg()
+			if ret == "ACK":
+				# this is the acknowledgement of the last command, re-try
+				continue
+			elif ret_string in ret:
+				tmp = int(ret.lstrip(ret_string))
+				break
 		return DEV_STATUS_CODES[tmp]
 
 	def id(self):
@@ -100,6 +106,7 @@ class GriplinkController:
 	def _recv_msg(self):
 		raw_msg = self.socket.recvfrom(256)[0]
 		msg = raw_msg.decode("ASCII").lstrip("\n")
+		msg = [x for x in msg.split("\n") if len(x)][-1]
 		return msg
 
 

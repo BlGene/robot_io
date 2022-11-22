@@ -54,9 +54,9 @@ class ApriltagDetector:
 
 
 if __name__ == '__main__':
-    cam_cfg = OmegaConf.load("../conf/cams/gripper_cam/realsense.yaml")
+    cam_cfg = OmegaConf.load("../../conf/cams/gripper_cam/realsense.yaml")
     cam = hydra.utils.instantiate(cam_cfg)
-    cfg = OmegaConf.load("../conf/marker_detector/apriltag_board.yaml")
+    cfg = OmegaConf.load("../../conf/marker_detector/apriltag_board.yaml")
     marker_detector = ApriltagDetector(cam, cfg.marker_description, cfg.min_tags)
     print("entering loop")
     while True:

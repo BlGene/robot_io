@@ -7,9 +7,18 @@ import pybullet_utils.bullet_client as bc
 import numpy as np
 from scipy.spatial.transform.rotation import Rotation as R
 # A logger for this file
-from robot_io.utils.utils import pos_orn_to_matrix, restrict_workspace, z_angle_between
+from robot_io.actions.actions import Action
+from robot_io.input_devices.base_input_device import BaseInputDevice
+from robot_io.utils.utils import pos_orn_to_matrix, z_angle_between
 
 log = logging.getLogger(__name__)
+
+POSITION = 1
+ORIENTATION = 2
+ANALOG = 3
+BUTTONS = 6
+BUTTON_A = 2
+BUTTON_B = 1
 
 GRIPPER_CLOSING_ACTION = -1
 GRIPPER_OPENING_ACTION = 1
@@ -17,62 +26,58 @@ GRIPPER_OPENING_ACTION = 1
 DEFAULT_RECORD_INFO = {"hold": False,
                        "hold_event": False,
                        "down": False,
+                       "dead_man_switch_down": False,
                        "dead_man_switch_triggered": False,
                        "triggered": False,
                        "trigger_release": False}
 
 
-class VrInput:
+class VrInput(BaseInputDevice):
     """
     Use HTC VIVE for tele-operation using Steam and Bullet VR.
 
     Args:
-        workspace_limits: Workspace limits defined as a bounding box or as hollow cylinder.
+        workspace: Workspace config.
         robot: Robot interface
         button_hold_threshold: After how many steps a button press counts as "hold".
     """
-    def __init__(self, robot,
-                 workspace_limits,
+    def __init__(self,
+                 robot,
+                 workspace,
+                 action_params,
                  button_hold_threshold=60,
                  tracking_error_threshold=0.03):
-        self.robot = robot
-        self.vr_controller_id = 3
-        self.POSITION = 1
-        self.ORIENTATION = 2
-        self.ANALOG = 3
-        self.BUTTONS = 6
-        self.BUTTON_A = 2
-        self.BUTTON_B = 1
-        self.gripper_orientation_offset = R.from_euler('xyz', [0, 0, np.pi / 2])
-        self.vr_pos_uid = None
-        self.vr_coord_rotation = np.eye(4)
-        self.workspace_limits = workspace_limits
-        self.tracking_error_threshold = tracking_error_threshold
-        self.has_tracking_error = False
-        self.p = None
-        self.button_1_press_counter = 0
-        self.button_hold_threshold = button_hold_threshold
+        self._robot = robot
+        self._action_params = action_params
+        self._gripper_orientation_offset = R.from_euler('xyz', [0, 0, np.pi / 2])
+        self._vr_coord_rotation = np.eye(4)
+        self._workspace = workspace
+        self._tracking_error_threshold = tracking_error_threshold
+        self._has_tracking_error = False
+        self._p = None
+        self._button_1_press_counter = 0
+        self._button_hold_threshold = button_hold_threshold
         self._initialize_bullet()
 
-        self.prev_action = None
-        self.robot_start_pos_offset = None
-        self.out_of_workspace_offset = np.zeros(3)
-        self.prev_button_info = DEFAULT_RECORD_INFO
+        self._prev_action = None
+        self._robot_start_pos_offset = None
+        self._out_of_workspace_offset = np.zeros(3)
+        self._prev_button_info = DEFAULT_RECORD_INFO
 
-        self.calibrate_vr_coord_system()
+        self._calibrate_vr_coord_system()
 
     def _initialize_bullet(self):
         """
         Connect to Bullet SHARED_MEMORY.
         """
-        self.p = bc.BulletClient(connection_mode=p.SHARED_MEMORY)
-        cid = self.p._client
+        self._p = bc.BulletClient(connection_mode=p.SHARED_MEMORY)
+        cid = self._p._client
         if cid < 0:
             log.error("Failed to connect to SHARED_MEMORY bullet server.\n" " Is it running?")
             sys.exit(1)
-        self.p.configureDebugVisualizer(self.p.COV_ENABLE_GUI, 0)
-        self.p.configureDebugVisualizer(self.p.COV_ENABLE_VR_PICKING, 0)
-        self.p.configureDebugVisualizer(self.p.COV_ENABLE_VR_RENDER_CONTROLLERS, 0)
+        self._p.configureDebugVisualizer(self._p.COV_ENABLE_GUI, 0)
+        self._p.configureDebugVisualizer(self._p.COV_ENABLE_VR_PICKING, 0)
+        self._p.configureDebugVisualizer(self._p.COV_ENABLE_VR_RENDER_CONTROLLERS, 0)
         log.info(f"Connected to server with id: {cid}")
 
     def get_action(self):
@@ -81,40 +86,44 @@ class VrInput:
         If no VR event arrived, return previous action.
 
         Returns:
-            action (dict): EE target pos, orn and gripper action (in robot base frame).
+            action (Action): EE target pos, orn and gripper action (in robot base frame).
             record_info (dict): Info with which buttons are pressed (for recording).
         """
-        record_info = DEFAULT_RECORD_INFO
-        vr_events = self.p.getVREvents()
-        if vr_events != ():
-            assert len(vr_events) == 1, "Only one VR controller should be turned on at the same time."
-            for event in vr_events:
-                # if event[0] == self.vr_controller_id:
-                vr_action = self._vr_event_to_action(event)
+        vr_action, record_info = self.get_vr_data()
+        if vr_action is None:
+            return self._prev_action, DEFAULT_RECORD_INFO
 
-                record_info = self._get_record_info(event)
+        # if "dead man's switch" is not pressed, do not update pose
+        if not record_info["dead_man_switch_down"]:
+            return self._prev_action, record_info
+        # reset button pressed
+        elif record_info["dead_man_switch_triggered"]:
+            self._has_tracking_error = False
+            self._prev_action = None
+            self._reset_vr_coord_system(vr_action)
+        elif self._has_tracking_error:
+            return self._prev_action, record_info
 
-                # if "dead man's switch" is not pressed, do not update pose
-                if not self._dead_mans_switch_down(event):
-                    return self.prev_action, record_info
-                # reset button pressed
-                elif self._dead_mans_switch_triggered(event):
-                    self.has_tracking_error = False
-                    self.prev_action = None
-                    self._reset_vr_coord_system(vr_action)
-                elif self.has_tracking_error:
-                    return self.prev_action, record_info
-                # transform pose from vr coord system to robot base frame
-                robot_action = self._transform_action_vr_to_robot_base(vr_action)
-                robot_action = {"motion": robot_action, "ref": "abs"}
+        # transform pose from vr coord system to robot base frame
+        action = self._preprocess_action(vr_action)
 
-                if self._check_tracking_error(robot_action):
-                    self.has_tracking_error = True
-                    log.error(f"Tracking error: {self.prev_action['motion'][0]}, {robot_action['motion'][0]}")
-                    return self.prev_action, record_info
+        if self._check_tracking_error(action):
+            self._has_tracking_error = True
+            log.error(f"Tracking error: {self._prev_action.target_pos}, {action.target_pos}")
+            return self._prev_action, record_info
 
-                self.prev_action = robot_action
-        return self.prev_action, record_info
+        self._prev_action = action
+        return self._prev_action, record_info
+
+    def get_vr_data(self):
+        vr_events = self._p.getVREvents()
+        if vr_events == ():
+            return None, None
+        assert len(vr_events) == 1, "Only one VR controller should be turned on at the same time."
+        for event in vr_events:
+            vr_action = self._vr_event_to_action(event)
+            record_info = self._get_record_info(event)
+            return vr_action, record_info
 
     def _check_tracking_error(self, current_action):
         """
@@ -122,12 +131,12 @@ class VrInput:
         exceeds a threshold.
 
         Args:
-            current_action (dict): Action at current time step.
+            current_action (Action): Action at current time step.
 
         Returns:
             True if tracking error, False otherwise.
         """
-        return self.prev_action is not None and np.any(np.abs(current_action["motion"][0] - self.prev_action["motion"][0]) > self.tracking_error_threshold)
+        return self._prev_action is not None and np.any(np.abs(current_action.target_pos - self._prev_action.target_pos > self._tracking_error_threshold))
 
     def _get_record_info(self, event):
         """
@@ -148,35 +157,36 @@ class VrInput:
         """
         button_1_hold = False
         if self._button_1_down(event):
-            self.button_1_press_counter += 1
+            self._button_1_press_counter += 1
         else:
-            self.button_1_press_counter = 0
-        if self.button_1_press_counter >= self.button_hold_threshold:
+            self._button_1_press_counter = 0
+        if self._button_1_press_counter >= self._button_hold_threshold:
             button_1_hold = True
 
-        self.prev_button_info = {"hold_event": button_1_hold and not self.prev_button_info["hold"],
-                                 "hold": button_1_hold,
-                                 "down": self._button_1_down(event),
-                                 "dead_man_switch_triggered": self._dead_mans_switch_triggered(event),
-                                 "triggered": self._button_1_triggered(event) and self._button_1_down(event),
-                                 "trigger_release": self._button_1_released(event) and not self.prev_button_info["hold"] and self.prev_button_info["down"],
-                                 "done": False}
-        return self.prev_button_info
+        self._prev_button_info = {"hold_event": button_1_hold and not self._prev_button_info["hold"],
+                                  "hold": button_1_hold,
+                                  "down": self._button_1_down(event),
+                                  "dead_man_switch_down": self._dead_mans_switch_down(event),
+                                  "dead_man_switch_triggered": self._dead_mans_switch_triggered(event),
+                                  "triggered": self._button_1_triggered(event) and self._button_1_down(event),
+                                  "trigger_release": self._button_1_released(event) and not self._prev_button_info["hold"] and self._prev_button_info["down"],
+                                  "done": False}
+        return self._prev_button_info
 
     def _dead_mans_switch_down(self, event):
-        return bool(event[self.BUTTONS][self.BUTTON_A] & p.VR_BUTTON_IS_DOWN)
+        return bool(event[BUTTONS][BUTTON_A] & p.VR_BUTTON_IS_DOWN)
 
     def _dead_mans_switch_triggered(self, event):
-        return bool(event[self.BUTTONS][self.BUTTON_A] & p.VR_BUTTON_WAS_TRIGGERED)
+        return bool(event[BUTTONS][BUTTON_A] & p.VR_BUTTON_WAS_TRIGGERED)
 
     def _button_1_down(self, event):
-        return bool(event[self.BUTTONS][self.BUTTON_B] & p.VR_BUTTON_IS_DOWN)
+        return bool(event[BUTTONS][BUTTON_B] & p.VR_BUTTON_IS_DOWN)
 
     def _button_1_triggered(self, event):
-        return bool(event[self.BUTTONS][self.BUTTON_B] & p.VR_BUTTON_WAS_TRIGGERED)
+        return bool(event[BUTTONS][BUTTON_B] & p.VR_BUTTON_WAS_TRIGGERED)
 
     def _button_1_released(self, event):
-        return bool(event[self.BUTTONS][self.BUTTON_B] & p.VR_BUTTON_WAS_RELEASED)
+        return bool(event[BUTTONS][BUTTON_B] & p.VR_BUTTON_WAS_RELEASED)
 
     def _reset_vr_coord_system(self, vr_action):
         """
@@ -188,15 +198,15 @@ class VrInput:
         Args:
             vr_action (tuple): The current vr controller position, orientation and gripper action.
         """
-        pos, orn = self.robot.get_tcp_pos_orn()
-        T_VR = self.vr_coord_rotation @ pos_orn_to_matrix(vr_action[0], vr_action[1])
+        pos, orn = self._robot.get_tcp_pos_orn()
+        T_VR = self._vr_coord_rotation @ pos_orn_to_matrix(vr_action[0], vr_action[1])
 
-        self.robot_start_pos_offset = pos - T_VR[:3, 3]
+        self._robot_start_pos_offset = pos - T_VR[:3, 3]
         self.robot_start_orn_offset = R.from_matrix(T_VR[:3, :3]).inv() * R.from_quat(orn)
 
-        self.out_of_workspace_offset = np.zeros(3)
+        self._out_of_workspace_offset = np.zeros(3)
 
-    def _transform_action_vr_to_robot_base(self, vr_action):
+    def _preprocess_action(self, vr_action):
         """
         Transform the vr controller pose to the coordinate system of the robot base.
 
@@ -210,15 +220,22 @@ class VrInput:
         """
         vr_pos, vr_orn, grip = vr_action
         # rotate vr coord system to align orientation with robot base frame
-        T_VR_Controller = self.vr_coord_rotation @ pos_orn_to_matrix(vr_action[0], vr_action[1])
+        T_VR_Controller = self._vr_coord_rotation @ pos_orn_to_matrix(vr_action[0], vr_action[1])
         # robot pos and orn are calculated relative to last reset
-        robot_pos = T_VR_Controller[:3, 3] + self.robot_start_pos_offset
+        robot_pos = T_VR_Controller[:3, 3] + self._robot_start_pos_offset
         robot_orn = R.from_matrix(T_VR_Controller[:3, :3]) * self.robot_start_orn_offset
         robot_orn = robot_orn.as_quat()
 
         robot_pos = self._enforce_workspace_limits(robot_pos)
 
-        return robot_pos, robot_orn, grip
+        action = Action(target_pos=robot_pos,
+                        target_orn=robot_orn,
+                        gripper_action=grip,
+                        ref="abs",
+                        path=self._action_params.path,
+                        blocking=False,
+                        impedance=self._action_params.impedance)
+        return action
 
     def _enforce_workspace_limits(self, controller_pos):
         """
@@ -231,9 +248,9 @@ class VrInput:
         Returns:
             Clipped position.
         """
-        controller_pos -= self.out_of_workspace_offset
-        clipped_pos = restrict_workspace(self.workspace_limits, controller_pos)
-        self.out_of_workspace_offset += controller_pos - clipped_pos
+        controller_pos -= self._out_of_workspace_offset
+        clipped_pos = self._workspace.clip(controller_pos)
+        self._out_of_workspace_offset += controller_pos - clipped_pos
         return clipped_pos
 
     def _vr_event_to_action(self, event):
@@ -248,9 +265,9 @@ class VrInput:
             vr_controller_orn: Orientation as quaternion (x,y,z,w) in VR frame.
             gripper_action: Binary gripper action.
         """
-        vr_controller_pos = np.array(event[self.POSITION])
-        vr_controller_orn = np.array(event[self.ORIENTATION])
-        controller_analogue_axis = event[self.ANALOG]
+        vr_controller_pos = np.array(event[POSITION])
+        vr_controller_orn = np.array(event[ORIENTATION])
+        controller_analogue_axis = event[ANALOG]
 
         gripper_action = GRIPPER_CLOSING_ACTION if controller_analogue_axis > 0.1 else GRIPPER_OPENING_ACTION
         return vr_controller_pos, vr_controller_orn, gripper_action
@@ -266,7 +283,7 @@ class VrInput:
             time.sleep(0.1)
         log.info("start button pressed")
 
-    def calibrate_vr_coord_system(self):
+    def _calibrate_vr_coord_system(self):
         """
         Align the orientation of the VR coordinate system to the robot base frame by moving the VR controller
         in x-direction of the robot base frame.
@@ -282,7 +299,7 @@ class VrInput:
         log.info("4. Press button 1 once.")
         log.info("------------------------------")
         while True:
-            vr_events = self.p.getVREvents()
+            vr_events = self._p.getVREvents()
             if vr_events != ():
                 for event in vr_events:
                     # if event[0] == self.vr_controller_id:
@@ -311,8 +328,8 @@ class VrInput:
         new_x = new_x / np.linalg.norm(new_x)
         old_x = np.array([1, 0])
         z_angle = z_angle_between(new_x, old_x)
-        self.vr_coord_rotation = np.eye(4)
-        self.vr_coord_rotation[:3, :3] = R.from_euler('z', [z_angle]).as_matrix()
+        self._vr_coord_rotation = np.eye(4)
+        self._vr_coord_rotation[:3, :3] = R.from_euler('z', [z_angle]).as_matrix()
 
 
 def print_buttons(vr_input):

@@ -125,16 +125,19 @@ def matrix_to_pos_orn(mat):
     pos = mat[:3, 3]
     return pos, orn
 
+
 def to_relative_action_pos_dict(pos, next_pos, gripper_action):
     rel_pos, rel_orn = to_relative(pos["tcp_pos"], pos["tcp_orn"], next_pos["tcp_pos"], next_pos["tcp_orn"])
     action = {"motion": (rel_pos, rel_orn, gripper_action), "ref": "rel"}
     return action
+
 
 def to_relative_action_dict(prev_action, action):
     rel_pos, rel_orn = to_relative(prev_action["motion"][0], prev_action["motion"][1], action["motion"][0], action["motion"][1])
     gripper_action = action["motion"][-1]
     action = {"motion": (rel_pos, rel_orn, gripper_action), "ref": "rel"}
     return action
+
 
 def to_relative_all_frames(pos_old, orn_old, pos_new, orn_new):
     rel_pos = pos_new - pos_old
@@ -145,6 +148,7 @@ def to_relative_all_frames(pos_old, orn_old, pos_new, orn_new):
 
     return {"world_frame": (rel_pos, rel_orn),
             "gripper_frame": (rel_pos_gripper_frame, rel_orn_gripper_frame)}
+
 
 def to_relative(pos_old, orn_old, pos_new, orn_new):
     rel_pos = pos_new - pos_old
@@ -173,42 +177,6 @@ def to_tcp_frame(rel_action_pos, rel_action_orn, tcp_orn):
 
     orn_tcp_rel = quat_to_euler(matrix_to_orn(np.linalg.inv(T_world_tcp) @ T_world_tcp_new))
     return pos_tcp_rel, orn_tcp_rel
-
-
-def restrict_workspace(workspace_limits, target_pos):
-    """
-    Clip target_pos at workspace limits.
-
-    Args:
-        workspace_limits: Either defined as a bounding box [[x_min, y_min, z_min], [x_max, y_max, z_max]]
-            or as a hollow cylinder [r_in, r_out, z_min, z_max].
-        target_pos: absolute target position (x,y,z).
-
-    Returns:
-        Clipped absolute target position (x,y,z).
-    """
-    if len(workspace_limits) == 2:
-        return np.clip(target_pos, workspace_limits[0], workspace_limits[1])
-    elif len(workspace_limits) == 4:
-        clipped_pos = target_pos.copy()
-        r_in = workspace_limits[0]
-        r_out = workspace_limits[1]
-        z_min = workspace_limits[2]
-        z_max = workspace_limits[3]
-        dist_center = np.sqrt(target_pos[0] ** 2 + target_pos[1] ** 2)
-        if dist_center > r_out:
-            theta = np.arctan2(target_pos[1], target_pos[0])
-            clipped_pos[0] = np.cos(theta) * r_out
-            clipped_pos[1] = np.sin(theta) * r_out
-        elif dist_center < r_in:
-            theta = np.arctan2(target_pos[1], target_pos[0])
-            clipped_pos[0] = np.cos(theta) * r_in
-            clipped_pos[1] = np.sin(theta) * r_in
-
-        clipped_pos[2] = np.clip(target_pos[2], z_min, z_max)
-        return clipped_pos
-    else:
-        raise ValueError
 
 
 class FpsController:

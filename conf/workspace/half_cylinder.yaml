@@ -1,0 +1,6 @@
+_target_: robot_io.workspace.workspace.HalfCylinderWorkspace
+_recursive_: false
+r_min: 0.2
+r_max: 0.4
+z_min: 0.1
+z_max: 0.3

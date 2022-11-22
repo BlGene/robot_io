@@ -4,6 +4,7 @@ import cv2
 from scipy.spatial.transform.rotation import Rotation as R
 import numpy as np
 
+from robot_io.actions.actions import Action
 from robot_io.utils.utils import euler_to_quat
 
 
@@ -44,6 +45,17 @@ class BaseRobotInterface:
     def __init__(self, ll, ul, *args, **kwargs):
         self.ll = np.array(ll)
         self.ul = np.array(ul)
+
+    def apply_action(self, action):
+        assert isinstance(action, Action)
+        success = self.move_cart_pos(target_pos=action.target_pos, target_orn=action.target_orn, ref=action.ref, path=action.path, blocking=action.blocking, impedance=action.impedance)
+        if action.gripper_action == 1:
+            self.open_gripper(blocking=action.blocking)
+        elif action.gripper_action == -1:
+            self.close_gripper(blocking=action.blocking)
+        else:
+            raise ValueError
+        return success
 
     def move_to_neutral(self):
         """
@@ -86,82 +98,39 @@ class BaseRobotInterface:
         """
         raise NotImplementedError
 
-    def move_cart_pos_abs_ptp(self, target_pos, target_orn):
+    def move_cart_pos(self, target_pos, target_orn, ref="abs", path="ptp", blocking=True, impedance=False):
         """
-        Move robot to absolute cartesian pose with a PTP motion, blocking
+        Move robot to cartesian pose.
 
         Args:
             target_pos: Target position (x,y,z).
             target_orn: Target orientation as quaternion (x,y,z,w) or euler_angles (α,β,γ).
+            ref: Reference frame. "abs" for absolute cartesian poses, "rel" for relative cartesian poses.
+            path: Path planning method. "ptp" for a movement linear in joint space,
+                  "lin" for a movement linear in cartesian space. Note that it might not be possible to reach the whole
+                  workspace space with a linear motion from an arbitrary configuration.
+            blocking: If True, wait until target pose is reached.
+            impedance: If True, use impedance control (if available).
         """
         raise NotImplementedError
 
-    def move_joint_pos(self, joint_positions):
+    def move_joint_pos(self, joint_positions, blocking=True):
         """
         Move robot to absolute joint positions, blocking.
 
         Args:
             joint_positions: (j1, ..., jn) in rad.
+            blocking: If True, wait until target position is reached.
         """
         raise NotImplementedError
 
-    def move_async_cart_pos_abs_ptp(self, target_pos, target_orn):
-        """
-        Move robot asynchronously to absolute cartesian pose with a PTP motion.
-
-        Args:
-            target_pos: Target position (x,y,z).
-            target_orn: Target orientation as quaternion (x,y,z,w) or euler_angles (α,β,γ).
-        """
-        raise NotImplementedError
-
-    def move_async_cart_pos_abs_lin(self, target_pos, target_orn):
-        """
-        Move robot asynchronously to absolute cartesian pose on a straight line path in cartesian space.
-        Note that it might not be possible to reach the whole workspace space with a linear motion from an arbitrary
-        configuration.
-
-        Args:
-            target_pos: Target position (x,y,z).
-            target_orn: Target orientation as quaternion (x,y,z,w) or euler_angles (α,β,γ).
-        """
-        raise NotImplementedError
-
-    def move_async_cart_pos_rel_ptp(self, rel_target_pos, rel_target_orn):
-        """
-        Move robot asynchronously to relative cartesian pose with a PTP motion.
-
-        Args:
-            rel_target_pos: Position offset (x,y,z).
-            rel_target_orn: Orientation offset as quaternion (x,y,z,w) or euler_angles (α,β,γ).
-        """
-        raise NotImplementedError
-
-    def move_async_cart_pos_rel_lin(self, rel_target_pos, rel_target_orn):
-        """
-        Move robot asynchronously to relative cartesian pose on a straight line path in cartesian space.
-
-        Args:
-            rel_target_pos: Position offset (x,y,z).
-            rel_target_orn: Orientation offset as quaternion (x,y,z,w) or euler_angles (α,β,γ).
-        """
-        raise NotImplementedError
-
-    def move_async_joint_pos(self, joint_positions):
-        """
-        Move robot asynchronously to absolute joint positions.
-
-        Args:
-            joint_positions: (j1, ..., jn).
-        """
-        raise NotImplementedError
-
-    def move_async_joint_vel(self, joint_velocities):
+    def move_joint_vel(self, joint_velocities, blocking=True):
         """
         Move robot asynchronously with joint velocities.
 
         Args:
             joint_velocities: (j1, ..., jn).
+            blocking: If True, wait until target position is reached.
         """
         raise NotImplementedError
 

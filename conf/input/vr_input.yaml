@@ -1,0 +1,9 @@
+_target_: robot_io.input_devices.vr_input.VrInput
+_recursive_: false
+robot: ???
+button_hold_threshold: 60
+workspace: ${robot.workspace}
+tracking_error_threshold: 0.05
+action_params:  # set according to robot
+  impedance: true
+  path: "lin"

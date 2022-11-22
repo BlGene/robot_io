@@ -77,7 +77,7 @@ def get_action_pos(path, i, use_rel_actions=False, control_frame="tcp"):
         return new_action
 
 
-@hydra.main(config_path="../conf", config_name="replay_recorded_trajectory")
+@hydra.main(config_path="../../conf", config_name="replay_recorded_trajectory")
 def main(cfg):
     """
     Replay a recorded trajectory, either with absolute actions or relative actions.

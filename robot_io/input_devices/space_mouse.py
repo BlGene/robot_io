@@ -4,6 +4,9 @@ SpaceMouse input class
 import time
 import numpy as np
 
+from robot_io.actions.actions import Action
+from robot_io.input_devices.base_input_device import BaseInputDevice
+
 try:
     import spnav
 except AttributeError as err:
@@ -17,19 +20,18 @@ GRIPPER_CLOSING_ACTION = -1
 GRIPPER_OPENING_ACTION = 1
 
 
-class SpaceMouse:
+class SpaceMouse(BaseInputDevice):
     """
     SpaceMouse input class
 
     Args:
-        act_type: ['continuous', 'discrete'] specifies action output
         sensitivity: Lower value corresponds to higher sensitivity
         mode: ['5dof', '7dof'] how many DOF of the robot are controlled
         initial_gripper_state: ['open', 'closed'] initial opening of gripper
         dv: Factor for cartesian position offset in relative cartesian position control, in meter
         drot: Factor for orientation offset of gripper rotation in relative cartesian position control, in radians
     """
-    def __init__(self, act_type='continuous', sensitivity=100, mode="5dof", initial_gripper_state='open',
+    def __init__(self, action_params, sensitivity=100, mode="5dof", initial_gripper_state='open',
                  dv=0.01, drot=0.2, reference_frame='tcp', **kwargs):
         # Note: this hangs if the SpaceNav mouse is not connecting properly
         # mostly commenting out this imput stream will be ok.
@@ -39,12 +41,9 @@ class SpaceMouse:
         print("Opening SpaceNav: done")
         assert mode in ['5dof', '7dof']
         assert initial_gripper_state in ['open', 'closed']
-        assert reference_frame in ["tcp", "world"]
+        self._action_params = action_params
         self.mode = mode
-        self.reference_frame = reference_frame
         self._gripper_state = 1 if initial_gripper_state == 'open' else -1
-        assert act_type in ['continuous', 'discrete']
-        self.act_type = act_type
         self.threshold = sensitivity
         self.dv = dv
         self.drot = drot
@@ -91,7 +90,14 @@ class SpaceMouse:
             self.prev_orn = sm_controller_orn
             self.filter = True
 
-        action = {"motion": (sm_controller_pos, sm_controller_orn, gripper_action), "ref": "rel"}
+        action = Action(target_pos=sm_controller_pos,
+                        target_orn=sm_controller_orn,
+                        gripper_action=gripper_action,
+                        ref=self._action_params.ref,
+                        path=self._action_params.path,
+                        blocking=False,
+                        impedance=self._action_params.impedance)
+
         # To be compatible with vr input actions. For now there is nothing to pass as record info
         record_info = {"done": False}
         self.clear_events()
@@ -122,11 +128,11 @@ class SpaceMouse:
                 z = -map_action(event.translation[1])
                 rot_z = -map_action(event.rotation[1])
 
-                if self.reference_frame == "world":
+                if self._action_params.ref == "rel_world":
                     y *= -1
                     z *= -1
                     rot_z *= -1
-                return self._process_action_type([x, y, z, rot_z, self._gripper_state])
+                return [x, y, z, rot_z, self._gripper_state]
             if event.ev_type == spnav.SPNAV_EVENT_BUTTON:
                 if event.bnum == 0 and event.press:
                     self._gripper_state = -1
@@ -134,7 +140,7 @@ class SpaceMouse:
                 elif event.bnum == 1 and event.press:
                     self._gripper_state = 1
                     print('open')
-        return self._process_action_type([0, 0, 0, 0, self._gripper_state])
+        return [0, 0, 0, 0, self._gripper_state]
 
     def handle_mouse_events_7dof(self):
         """7 dof mode, xyz + abc + gripper"""
@@ -161,20 +167,6 @@ class SpaceMouse:
                     self._gripper_state = 1
                     print('open')
         return [0, 0, 0, 0, 0, 0, self._gripper_state]
-
-    def _process_action_type(self, action):
-        if self.act_type == 'continuous':
-            return action
-
-        mdisc_a = [0] * len(action)
-        for i, act in enumerate(action):
-            if act < 0:
-                mdisc_a[i] = 0
-            elif act == 0:
-                mdisc_a[i] = 1
-            else:
-                mdisc_a[i] = 2
-        return mdisc_a
 
     @staticmethod
     def clear_events():

@@ -1,0 +1,8 @@
+_target_: robot_io.workspace.workspace.BoxWorkspace
+_recursive_: false
+x_min: -0.4
+x_max: 0.4
+y_min: -0.4
+y_max: 0.4
+z_min: 0.05
+z_max: 0.4
