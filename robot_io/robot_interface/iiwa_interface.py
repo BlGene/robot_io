@@ -156,7 +156,8 @@ class IIWAInterface(BaseRobotInterface):
     def _create_info_dict(state):
         state[:3] *= 0.001
         return {'tcp_pose': state[:6], 'joint_positions': state[6:13], 'desired_tcp_pose': state[13:17],
-                'force_torque': state[17:23]}
+                'force_torque': state[17:23],
+                "timestamp": time.time()}
 
     def _send_recv_message(self, message, recv_msg_size):
         self._socket.send(bytes(message))

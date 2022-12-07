@@ -1,7 +1,7 @@
 defaults:
   - env: env
   - robot: ur_interface
-  - input: keyboard
+  - input: 3dmouse
   - recorder: simple_recorder
   - cams: camera_manager
   - override cams/gripper_cam: realsense_d435

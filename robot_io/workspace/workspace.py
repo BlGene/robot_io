@@ -1,7 +1,8 @@
 import copy
 
 import numpy as np
-
+import logging
+log = logging.getLogger(__name__)
 from robot_io.actions.actions import Action
 
 
@@ -58,10 +59,14 @@ class BoxWorkspace(BaseWorkSpace):
         return np.all(self.limits[0] <= pos) and np.all(pos <= self.limits[1])
 
     def _clip(self, pos):
+        if self.is_inside(pos):
+            return pos.copy()
+        log.warning("Workspace is clipped.")
         return np.clip(pos, self.limits[0], self.limits[1])
 
     def __str__(self):
         return f"Box workspace(x_min={self.limits[0,0]}, x_max={self.limits[1, 0]}, y_min={self.limits[0,1]}, y_max={self.limits[1,1]}, z_min={self.limits[0,2]}, z_max={self.limits[1,2]}"
+
 
 class CylinderWorkspace(BaseWorkSpace):
     """
@@ -80,6 +85,7 @@ class CylinderWorkspace(BaseWorkSpace):
     def _clip(self, pos):
         if self.is_inside(pos):
             return pos.copy()
+        log.warning("Workspace is clipped.")
         clipped_pos = pos.copy()
         dist_center = np.sqrt(pos[0] ** 2 + pos[1] ** 2)
         if dist_center > self.r_max:
@@ -97,6 +103,7 @@ class CylinderWorkspace(BaseWorkSpace):
     def __str__(self):
         return f"Cylindrical workspace(r_min={self.r_min}, r_max={self.r_max}, z_min={self.z_min}, z_max={self.z_max}"
 
+
 class HalfCylinderWorkspace(CylinderWorkspace):
     """
     Half-cylindrical workspace.
@@ -110,9 +117,13 @@ class HalfCylinderWorkspace(CylinderWorkspace):
     def _clip(self, pos):
         if self.is_inside(pos):
             return pos.copy()
+
         clipped_pos = pos.copy()
         if clipped_pos[0] <= 0:
             clipped_pos[0] = 0
+        if super().is_inside(clipped_pos):
+            # This is a redundant check but otherwise the warning would be printed twice
+            log.warning("Workspace is clipped.")
         return super()._clip(clipped_pos)
 
     def __str__(self):

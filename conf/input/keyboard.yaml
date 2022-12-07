@@ -7,4 +7,4 @@ mode: '5dof'
 action_params:  # set according to robot
   impedance: false
   path: "lin"
-  ref: "rel_world"
+  ref: "rel"

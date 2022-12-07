@@ -183,7 +183,8 @@ class URInterface(BaseRobotInterface):
                  "tcp_orn": orn,
                  "joint_positions": np.array(self._rtde_r.getActualQ()),
                  "gripper_opening_width": self._gripper.get_opening_width(),
-                 "force_torque": wrench_world_to_tcp(self._rtde_r.getActualTCPForce(), orn)}
+                 "force_torque": wrench_world_to_tcp(self._rtde_r.getActualTCPForce(), orn),
+                 "timestamp": time.time()}
         contact = np.zeros(6)
         contact[np.where(np.abs(state["force_torque"]) > self._contact_force_threshold)] = 1
         state["contact"] = contact
@@ -234,27 +235,27 @@ class URInterface(BaseRobotInterface):
 
 
 if __name__ == "__main__":
-    hydra.initialize("../../conf/robot/")
-    cfg = hydra.compose("ur_interface.yaml")
-    robot = hydra.utils.instantiate(cfg)
+    hydra.initialize("../../conf")
+    cfg = hydra.compose("robot/ur_interface.yaml")
+    robot = hydra.utils.instantiate(cfg.robot)
 
     robot.move_to_neutral()
+    #
+    # home_pos, home_orn = robot.get_tcp_pos_orn()
+    # print("home:", home_pos, home_orn)
+    #
+    # orn = np.array([0, 0, 0])
+    # for i in range(100):
+    #     pos = np.random.uniform(-0.02, 0.02, 3)
+    #     blocking = np.random.choice([True, False])
+    #     path = np.random.choice(["ptp", "lin"])
+    #     robot.move_cart_pos(pos, orn, ref="rel", blocking=blocking, path=path)
+    #     print(pos, blocking, path)
+    #     print(robot.get_tcp_pos_orn())
+    #     time.sleep(np.random.random())
+    #
+    # # pos = np.array([-0.01, 0, 0])
+    # # robot.move_cart_pos(pos, orn, ref="rel", blocking=False, path="ptp")
 
-    home_pos, home_orn = robot.get_tcp_pos_orn()
-    print("home:", home_pos, home_orn)
-
-    orn = np.array([0, 0, 0])
-    for i in range(100):
-        pos = np.random.uniform(-0.02, 0.02, 3)
-        blocking = np.random.choice([True, False])
-        path = np.random.choice(["ptp", "lin"])
-        robot.move_cart_pos(pos, orn, ref="rel", blocking=blocking, path=path)
-        print(pos, blocking, path)
-        print(robot.get_tcp_pos_orn())
-        time.sleep(np.random.random())
-
-    # pos = np.array([-0.01, 0, 0])
-    # robot.move_cart_pos(pos, orn, ref="rel", blocking=False, path="ptp")
-
-    print("done!")
     print(robot.get_state())
+    print("done!")

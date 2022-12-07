@@ -189,7 +189,8 @@ class PandaFrankXInterface(BaseRobotInterface):
                  "joint_positions": np.array(_state.q),
                  "gripper_opening_width": self._gripper.width(),
                  "force_torque": WRENCH_FRAME_CONV @ np.array(_state.K_F_ext_hat_K),
-                 "contact": np.array(_state.cartesian_contact)}
+                 "contact": np.array(_state.cartesian_contact),
+                 "timestamp": time.time()}
         return state
 
     def get_tcp_pos_orn(self):

@@ -44,6 +44,21 @@ def unprocess_seg(pixel):
     return obj_uid, link_index
 
 
+class DummyRecorder(BaseRecorder):
+    """Do nothing, utility for cleaner code"""
+    def step(self, obs, action, next_obs, rew, done, info, record_info={}):
+        pass
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    def save(self, save_images=None, save_video=False):
+        pass
+
+
 class SimpleRecorder(BaseRecorder):
     def __init__(self, env, save_dir=None, n_digits=6):
         """
@@ -66,12 +81,16 @@ class SimpleRecorder(BaseRecorder):
             os.makedirs(save_dir, exist_ok=True)
         self.save_dir = save_dir
 
-    def step(self, obs, action, next_obs, rew, done, info, record_info):
+    def step(self, obs, action, next_obs, rew, done, info, record_info=None):
+        if obs is None:
+            obs = {}
+        if record_info is None:
+            record_info = {}
         filename = f"frame_{self.save_frame_cnt:0{self.n_digits}d}.npz"
         filename = Path(self.save_dir) / filename
         self.current_episode_filenames.append(filename)
         self.save_frame_cnt += 1
-        self.queue.append((filename, action, next_obs, rew, done, info))
+        self.queue.append((filename, action, obs, rew, done, info))
 
     def process_queue(self, image_path=None):
         """
@@ -125,7 +144,7 @@ class SimpleRecorder(BaseRecorder):
 
         self.save_info()
 
-        print(f"saved {self.save_dir} w/ length {length}")
+        log.info(f"saved recording to: {self.save_dir} w/ length {length}")
 
     def save_video(self):
         subproc_cmd = f'ffmpeg -framerate 8 -i {self.save_dir}/frame_%06d.jpg -r 25 -pix_fmt yuv420p ' \

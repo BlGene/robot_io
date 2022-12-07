@@ -48,7 +48,9 @@ class BaseRobotInterface:
 
     def apply_action(self, action):
         assert isinstance(action, Action)
-        success = self.move_cart_pos(target_pos=action.target_pos, target_orn=action.target_orn, ref=action.ref, path=action.path, blocking=action.blocking, impedance=action.impedance)
+        success = self.move_cart_pos(target_pos=action.target_pos, target_orn=action.target_orn,
+                                     ref=action.ref, path=action.path, blocking=action.blocking,
+                                     impedance=action.impedance)
         if action.gripper_action == 1:
             self.open_gripper(blocking=action.blocking)
         elif action.gripper_action == -1:

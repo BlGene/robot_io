@@ -110,6 +110,8 @@ def main(cfg):
     """
     Calibrate the gripper camera.
     Put the marker on the table such that it is visible in the gripper camera from the randomly sampled poses.
+    Example: To calibrate the gripper cam of the UR3 robot, call
+    `python gripper_cam_calibration --config_name=ur3_calibrate_gripper_cam`
 
     Args:
         cfg: Hydra config.
