@@ -28,6 +28,8 @@ def main(cfg):
             obs = next_obs
             done = record_info["done"]
 
+        recorder.save()
+
 
 if __name__ == "__main__":
     main()

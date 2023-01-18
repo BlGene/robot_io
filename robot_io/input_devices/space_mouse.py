@@ -51,6 +51,7 @@ class SpaceMouse(BaseInputDevice):
         self.filter = True
         self.prev_pos = np.zeros(3)
         self.prev_orn = np.zeros(3)
+        self.done = False
 
     def __del__(self):
         spnav.spnav_close()
@@ -99,7 +100,7 @@ class SpaceMouse(BaseInputDevice):
                         impedance=self._action_params.impedance)
 
         # To be compatible with vr input actions. For now there is nothing to pass as record info
-        record_info = {"done": False}
+        record_info = {"done": self.done}
         self.clear_events()
 
         return action, record_info
@@ -112,6 +113,20 @@ class SpaceMouse(BaseInputDevice):
             return self.handle_mouse_events_7dof()
 
         raise ValueError
+
+    def handle_mouse_button(self, event):
+        if event.bnum == 0 and event.press:
+            if self._gripper_state == 1:
+                self._gripper_state = -1
+                print("close")
+            elif self._gripper_state == -1:
+                self._gripper_state = 1
+                print('open')
+            else:
+                raise ValueError
+        if event.bnum == 1 and event.press:
+            self.done = True
+
 
     def handle_mouse_events_5dof(self):
         """5dof mode xyz + a + gripper"""
@@ -134,12 +149,8 @@ class SpaceMouse(BaseInputDevice):
                     rot_z *= -1
                 return [x, y, z, rot_z, self._gripper_state]
             if event.ev_type == spnav.SPNAV_EVENT_BUTTON:
-                if event.bnum == 0 and event.press:
-                    self._gripper_state = -1
-                    print("close")
-                elif event.bnum == 1 and event.press:
-                    self._gripper_state = 1
-                    print('open')
+                self.handle_mouse_button(event)
+
         return [0, 0, 0, 0, self._gripper_state]
 
     def handle_mouse_events_7dof(self):
