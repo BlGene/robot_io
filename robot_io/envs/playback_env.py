@@ -18,6 +18,7 @@ import numpy as np
 from robot_io.cams.camera import Camera as RobotIOCamera
 from robot_io.recorder.simple_recorder import unprocess_obs, SimpleRecorder
 from robot_io.utils.utils import pos_orn_to_matrix
+from robot_io.actions.actions import Action
 
 
 class PlaybackCamera(RobotIOCamera):
@@ -118,6 +119,14 @@ class PlaybackEnvStep:
             return None
 
         # TODO(max): this is fucking ridiculous, default to tuples.
+        if isinstance(action, Action):
+            if component is None:
+                return action
+            elif component == "gripper":
+                return float(action.gripper_action)
+            else:
+                raise ValueError
+
         if isinstance(action["motion"], tuple):
             action["motion"] = list(action["motion"])
 
