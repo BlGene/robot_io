@@ -20,7 +20,8 @@ def main(cfg):
 
     while True:
         for p in (left_pos, right_pos):
-            if not robot.move_cart_pos_abs_ptp(p, orn):
+            #if not robot.move_cart_pos_abs_ptp(p, orn):
+            if not robot.move_cart_pos(p, orn, ref="abs", blocking=True, path="lin")
                 exit()
 
 

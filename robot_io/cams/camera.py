@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import logging
-import open3d as o3d
 
 from robot_io.utils.utils import get_git_root
 
@@ -90,16 +89,6 @@ class Camera:
             pointcloud = np.concatenate([pointcloud, color], axis=1)
         return pointcloud
 
-    @staticmethod
-    def view_pointcloud(pointcloud):
-        pc = o3d.geometry.PointCloud()
-        pc.points = o3d.utility.Vector3dVector(pointcloud[:, :3])
-        if pointcloud.shape[1] == 6:
-            pc.colors = o3d.utility.Vector3dVector(pointcloud[:, 3:6])
-        elif pointcloud.shape[1] == 7:
-            pc.colors = o3d.utility.Vector3dVector(pointcloud[:, 4:7])
-        o3d.visualization.draw_geometries([pc])
-
     def project(self, X):
         if X.shape[0] == 3:
             if len(X.shape) == 1:
@@ -156,10 +145,6 @@ class Camera:
         else:
             return np.array([X, Y, Z])
 
-    @staticmethod
-    def draw_point(img, point, color=(255, 0, 0)):
-        img[point[1], point[0]] = color
-
     # TODO(max): remove robot_name argument.
     def get_extrinsic_calibration(self, robot_name):
         calib_folder = get_git_root(__file__) / "robot_io/calibration/calibration_files"
@@ -173,9 +158,18 @@ class Camera:
         assert calib_extrinsic.shape == (4, 4)
         return calib_extrinsic
 
+    @staticmethod
+    def draw_point(img, point, color=(255, 0, 0)):
+        img[point[1], point[0]] = color
 
-
-
-
-
+    @staticmethod
+    def view_pointcloud(pointcloud):
+        import open3d as o3d
+        pc = o3d.geometry.PointCloud()
+        pc.points = o3d.utility.Vector3dVector(pointcloud[:, :3])
+        if pointcloud.shape[1] == 6:
+            pc.colors = o3d.utility.Vector3dVector(pointcloud[:, 3:6])
+        elif pointcloud.shape[1] == 7:
+            pc.colors = o3d.utility.Vector3dVector(pointcloud[:, 4:7])
+        o3d.visualization.draw_geometries([pc])
 
