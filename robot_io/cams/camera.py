@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import logging
 import open3d as o3d
-
+import ipdb
 from robot_io.utils.utils import get_git_root
 
 log = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ class Camera:
             pc.colors = o3d.utility.Vector3dVector(pointcloud[:, 4:7])
         o3d.visualization.draw_geometries([pc])
 
-    def project(self, X):
+    def project(self, X)    :
         if X.shape[0] == 3:
             if len(X.shape) == 1:
                 X = np.append(X, 1)
@@ -110,8 +110,8 @@ class Camera:
         x = self.get_projection_matrix() @ X
         result = np.round(x[0:2] / x[2]).astype(int)
         width, height = self.get_intrinsics()['width'], self.get_intrinsics()['height']
-        if not (0 <= result[0] < width and 0 <= result[1] < height):
-            log.warning("Projected point outside of image bounds")
+        # if not (0 <= result[0] < width and 0 <= result[1] < height):
+        #     log.warning("Projected point outside of image bounds")
         return result[0], result[1]
 
     def deproject(self, point, depth, homogeneous=False):

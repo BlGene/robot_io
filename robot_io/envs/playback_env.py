@@ -48,8 +48,12 @@ class PlaybackCamera(RobotIOCamera):
     def get_extrinsic_calibration(self):
         return self.gripper_extrinsic_calibration
 
-    # def get_projection_matrix(self):
-    #    raise NotImplementedError
+    def get_projection_matrix(self):
+        intr = self.get_intrinsics()
+        cam_mat = np.array([[intr['fx'], 0, intr['cx'], 0],
+                            [0, intr['fy'], intr['cy'], 0],
+                            [0, 0, 1, 0]])
+        return cam_mat
 
     # def get_camera_matrix(self):
     #    raise NotImplementedError
